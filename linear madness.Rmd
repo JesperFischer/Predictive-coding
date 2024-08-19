@@ -1,0 +1,265 @@
+---
+title: "Linear madness"
+output: html_document
+date: "2024-08-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(cmdstanr)
+register_knitr_engine(override = FALSE)
+
+seeds = 123
+```
+
+## This markdown is supposed to give a gentle refresher on linear models and in doing so introduce STAN and bayesian inference.
+
+### In order to start we make some data (i.e. we simulate it). This is one of the most useful take aways. No matter what kind of question and or statistical framework one uses simulating senarioes and then seeing what happens is so usefull because you know the results and therefore can see when something works and when it does not!
+
+### Therefore for the first simulation of data we take it slow!
+
+### We want to simulate data where we have two variables that are linearly dependent. All that means that we can mathematically write the relationship between the two variables (x and y) as something like the following.
+
+$$
+y = a + b \cdot x
+$$
+
+### so if we conducted an experiment we would be collecting x and y and we would want to estimate the parameters i.e. a and b from the linear model. 
+
+### However when simulating data we choose the parameters and simulate the independent variables (i.e. our y).
+
+
+### This means that we need to simulate some intercepts (a) some slope (b) and some data (x) we do this in the following. Note the parameters (a and b) are single values whereas the data (x) is vectors (many values).  Here we choose that the intercept is 5 the slope is 3 and x is a sequence of numbers from 0 to 100 in increments of 1.
+
+```{r}
+N = 100
+a = 5
+b = 3
+x = seq(0,100, length.out = N)
+```
+
+### Given the formula we had above we have that y is:
+
+```{r}
+y = a+b*x
+```
+
+### Now importantly we can plot it. If you can't plot it you do not understand it.
+
+```{r}
+data.frame() %>% ggplot(aes(x =x,y = y))+geom_point()+theme_classic()
+```
+
+### We have made a straight line of points! Perfect. However this is not how data looks there is noise! We can add such noise by the way that we select our x.
+### Instead of just getting a sequence of numbers from 0 to 100 we can sample from a distribution. to do this we need to specify the spread of the distribution. 
+### this is sigma which here i set to 10
+
+```{r}
+sigma = 10
+x = rnorm(N,50,sigma)
+y = a+b*x
+
+```
+
+```{r}
+data.frame() %>% ggplot(aes(x =x,y = y))+geom_point()+theme_classic()
+```
+## Well that did not work. Which is because there still is a deterministic relationship between x and y. 
+
+## What is assumed in a linear regression is that the is that the y is stochastically related to x i.e. y ~ x. where the link is given by the probability density function. i.e.
+## y ~ N(a+b*x , sigma)
+## so we might go back and take the sequence of x's:
+```{r}
+x = seq(0,100,length.out = N)
+y = rnorm(N,a+b*x,10)
+```
+
+## and plotting it
+
+```{r}
+data.frame() %>% ggplot(aes(x =x,y = y))+geom_point()+theme_classic()
+```
+
+## looks much more right.
+
+## Now that we have some simulated data where we know the parameters i.e. a b and sigma, we can try and fit the model. We do this by lm.
+
+```{r}
+m1 = lm(y~x)
+sjPlot::tab_model(m1)
+```
+
+
+### here we get a (intercept) and b the slope. Which are not terribly off. To get the last parameter sigma we have to specfify it:
+
+```{r}
+sigma(m1)
+```
+
+### Also decent.
+
+# Stan
+
+## now that we have simulated data fit it in a frequentists framework and seen it work we can try and make a STAN model to fit it 
+
+## To make this STAN model work we have to write the code our selves. However this process of writing the STAN program is close to identical to that of simulating the data.
+
+## STAN needs 3 main things. It needs to know what data you put into it, the "free" parameters and then it needs to know your model. (Note here model just means the thing we specified above i.e. y ~ N(a+b*x,sigma), with N being the normal distribution).
+
+
+```{cmdstan, output.var="model_obj2"}
+//This block defines the input that. So these things needs to go into the model
+data {
+  //Define the number of datapoints this is defined by an integer
+  int N;
+  //Define a vector called y that is as long as the number of datapoints (i.e. N)
+  vector[N] y;
+  // same as y but a variable called x
+  vector[N] x;
+}
+
+// This is the parameters block. Here we define the free parameters which are the onces that STAN estimates for us
+parameters {
+  real a;
+  real b;
+  real sigma;
+}
+
+// This is the model block here we define how we believe the model is (of cause we simulated the data so we just put in the same thing as we did when simulating)
+model {
+  y ~ normal(a+b*x, sigma);
+}
+```
+
+## Notes about this model
+
+
+```{r}
+fit = model_obj2$sample(data = list(N =N, x = x, y =y), seed = seeds)
+```
+
+
+## that was alot of output to then get alot of warnings after around 10-11 secounds. Lets look at the output
+```{r}
+fit
+```
+
+## Well that is quite decent and really really close to the linear model estimates! Lets plot the estimates to compare them.
+```{r}
+#linear model
+freq = data.frame(summary(m1)$coefficients) %>% rownames_to_column() %>% rename(coef = Estimate, error = Std..Error) %>% select(coef,error,rowname) %>% 
+  pivot_wider(names_from = rowname, values_from = c("coef","error")) %>% mutate(sigma = sigma(m1))
+
+freq = data.frame(variable = c("a","b","sigma"),
+           mean = c(freq$`coef_(Intercept)`,freq$coef_x,freq$sigma),
+           q5 = c(freq$`coef_(Intercept)` - 2 * freq$`error_(Intercept)`,freq$coef_x - 2 * freq$error_x,0),
+           q95 = c(freq$`coef_(Intercept)` + 2 * freq$`error_(Intercept)`,freq$coef_x + 2 * freq$error_x,0))%>% mutate(estimation = "Frequentist")
+
+bayes = fit$summary(c("a","b","sigma")) %>% mutate(estimation = "Bayes") %>% select(variable,mean,q5,q95,estimation)
+
+
+
+data.frame() %>% ggplot()+
+  geom_pointrange(data = rbind(freq,bayes), aes(y = variable, x = mean, xmin = q5, xmax = q95, col = estimation), position=position_dodge(width=0.2))+
+  theme_minimal()+  theme(legend.position = "top")+xlab("mean and 95% confidence interval of estimated parameter value")
+
+```
+
+### Looks similar and also matches quite nicely what we put in (a = 5, b = 3 and sigma = 10). There are however some things to note about the above.
+
+### The main difference is the uncertainty estimate (the vertical bars) of the sigma (how spread the data is around our predictions). We see that the Freq. model is just a point (it is a point), but that there is some uncertainty around it in the bayesian perspective and here that actually overlaps with the real value of 10. This is going to be a theme. In bayes you can estimate many more parameters that gets fixed in the frequentists perspective. With this estimation you therefore also get uncertainty estimates which i would argue makes the estimates themselves usefull!
+
+
+
+
+# Priors
+
+## I have here just left out everything about priors and have run a bayesian model "without" priors. This is because we shouldn't get paralyzed by these priors they are freinds that help us with our models. But now we do have to talk about them!
+
+
+## Priors are just some distributions that we put on our parameters of interrest. That is it. If we take the previous model we can set some priors on our 3 parameters and see what happens. Below i set the same priors for our three parameters here a normal distribution with mean 0 and standard deviation 100.
+## These are extremely wide priors. In order to understand what they entail we plot them, but not as their distributions as that isn't to helpful (can be done with plot(hist(rnorm(10000,0,100)))), but instead we plot the resulting regression lines we think are possible apriori to seeing the data. Here i plot 100 of such "realizations" of just the regression lines without the uncertainty about them.
+
+```{r}
+data.frame(a = rnorm(100,0,100), b = rnorm(100,0,100), draw = as.factor(1:100)) %>% 
+  group_by(draw) %>% 
+  mutate(x = list(seq(0,100,by = 1)),
+         y = list(a + b * seq(0,100,by = 1))) %>% unnest() %>% 
+  ggplot()+geom_line(aes(x = x,y = y, group = draw), alpha = 0.5)+theme_minimal()
+
+```
+
+## This is kind crazy unless you have some very big observations but less see if stan can handle it
+
+```{cmdstan, output.var="model_obj"}
+data {
+  int<lower=0> N;
+  vector[N] y;
+  vector[N] x;
+}
+
+parameters {
+  real a;
+  real b;
+  real<lower=0> sigma;
+}
+
+
+model {
+  a ~ normal(0,100);
+  b ~ normal(0,100);
+  sigma ~ normal(0,100);
+  y ~ normal(a+b*x, sigma);
+}
+```
+
+### Fit the model:
+
+```{r}
+fit2 = model_obj$sample(data = list(N =N, x = x, y =y), seed = seeds)
+```
+
+### Even faster than before!
+
+### So we might want to see what the prior looks like compared to the estimates after seeing the data (the posterior):
+```{r}
+
+prior = data.frame(variable = c("a","b","sigma"), mean = c(0,0,0), q5 = rep(qnorm(0.05, 0, 100), 3), q95 = rep(qnorm(0.95, 0, 100), 3)) %>% mutate(estimation = "Prior")
+
+bayes2 = fit$summary(c("a","b","sigma")) %>% mutate(estimation = "Bayes_withpriors") %>% select(variable,mean,q5,q95,estimation)
+
+data.frame() %>% ggplot()+
+  geom_pointrange(data = rbind(prior,bayes2), aes(y = variable, x = mean, xmin = q5, xmax = q95, col = estimation), position=position_dodge(width=0.2))+
+  theme_minimal()+  theme(legend.position = "top")+xlab("mean and 95% confidence interval of estimated parameter value")
+```
+### Oh yes the prior is veery wide compared to the actual estimates, but that is fine! Lets compare estimates with the other models:
+
+### compare estimates
+
+```{r}
+
+bayes2 = fit$summary(c("a","b","sigma")) %>% mutate(estimation = "Bayes_withpriors") %>% select(variable,mean,q5,q95,estimation)
+
+
+data.frame() %>% ggplot()+
+  geom_pointrange(data = rbind(freq,bayes,bayes2), aes(y = variable, x = mean, xmin = q5, xmax = q95, col = estimation), position=position_dodge(width=0.2))+
+  theme_minimal()+  theme(legend.position = "top")+xlab("mean and 95% confidence interval of estimated parameter value")
+
+```
+
+### Again very very similar:
+
+### Now one could play around with other priors and see how it changes the estimates. Which i leave to the reader for now. Please try and set bad priors and make STAN fail and complain that is one of the main features of STAN, it complains and it complains alot!
+
+
+
+
+### To do's 
+
+* explain contrained variables
+* sampler things (parallelization blablablabla)
+* how to handle output of the STAN fits (draws and summaries)
+* learning models
+* joint models
+

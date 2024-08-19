@@ -1,0 +1,160 @@
+---
+title: "Joint modeling"
+output: html_document
+date: "2024-08-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(cmdstanr)
+register_knitr_engine(override = FALSE)
+
+seeds = 123
+
+set.seed(123)
+```
+
+## This markdown is supposed to give a gentle introduction to logistic regression and in doing so introduce STAN and bayesian inference. As a bonus because this Markdown will assume that you have read the linear madness will also introduce what i will here call joint modeling, which we'll get to later. In this section i will firstly introduce the logistic regression through coin tosses.
+
+## First we start by examining the logistic regression. When researchers conduct logistic regresssions they are interested in the probability (p) that some event will happen. One can do this by observing the realizations of these probabilities i.e. the outcomes. The standard example is a toss of a coin. to determine the probability (p) that the coin lands tails we can observe the number of times it does land on tails and compare that to the total number of tosses. The probability mass function that we use when doing logistic regression is the bernoulli distribution (just as we used the normal distribution to do normal linear regression). As with the normal distribution we can simulate from this and get different realizations given our parameter (p).
+
+```{r}
+N = 50
+p = 0.8
+tails = rbinom(N,1,p)
+tails
+```
+
+(Note that here i use the binomial distribution which is the same as the Bernoulli as long as the second parameter is 1, more on that later).
+
+## Here we thus have 50 coin tosses and when its 1 we say that the coin flipped tails and 0 when it was heads. Here i've set the probability to 0.8 which will make sense in a bit. Because now we want to see if we can recover the parameter that we put in i.e. p = 0.8. This is therefore similar to before we simulated some data from parameters (a, b and sigma in the normal section and p here) and now want to see if we can get the parameter out from just the data. This is where STAN shines.
+
+## We therefore write a STAN program as follows:
+
+```{cmdstan, output.var="model_obj"}
+
+data {
+  int<lower=0> N;
+  // Here we define the outcomes (i.e. number of tails) as a vector of integers (a vector of integers has to be an array)
+  array[N] int y;
+}
+
+parameters {
+  real p;
+}
+
+//here is the model block again the same as how we simulated the data.
+model {
+  y ~ bernoulli(p);
+  
+}
+```
+
+
+```{r}
+fit = model_obj$sample(data = list(N =N, y =tails), seed = seeds)
+```
+## Wauw that is alot of warning messages and red text. This isn't too bad but we have gotten our first divergent transitions! This can be seen as the last thing that stan prints. This will be important as these are one of the main complains that STAN will give us, which we have to figure out why they are there and then eradicate them. Rule of thump is that for completely reliable inference we say no divergent transistings should be present!
+
+## Lets start by the output of this "incorrect" model (now we just look at the raw output which you'll have to familiarize yourself with)
+
+```{r}
+fit
+```
+## This doesn't look bad our probabilty parameter p is very close to 0.8 and the 95% credibility interval has the real simulated value in it.
+
+
+## But what was all these warning and Informational messages about? lets break it down as its basically the same line that is printed again and again i.e:
+
+## Exception: bernoulli_lpmf: Probability parameter is 1.83245, but must be in the interval [0, 1] (in '/tmp/RtmpkjjcHZ/model-25f91c6cab858d.stan', line 14, column 2 to column 19)
+
+## what STAN is telling us is that there is a Probability parameter that is a particular value (for the iteration STAN is going through atm (this therefore changes)) but that is has to be between 0 and 1 ([0, 1]). So STAN basically tells us that we have some probability parameter that is not between 0 and 1 and it should be given that is a probability parameter. Then STAN goes on to tell us that its somewhere on line 14.
+
+## So the problem is that we have to tell stan that our parameter (p) is a probabilty parameter i.e. that it is bounded between 0 and 1. There are several ways of doing this and I'll here show two. The first is STAN's built in way which looks like this:
+
+
+```{cmdstan, output.var="model_obj"}
+
+data {
+  int N;
+  // Here we define the outcomes (i.e. number of tails) as a vector of integers (a vector of integers has to be an array)
+  array[N] int y;
+}
+
+parameters {
+  // probability parameter p between 0 and 1 i.e. upper and lower bounds at 0 and 1
+  real <lower=0, upper = 1> p;
+}
+
+//here is the model block again the same as how we simulated the data.
+model {
+  y ~ bernoulli(p);
+  
+}
+```
+
+## The other option is to constrain the parameter one self. We do this by transforming the probability parameter to the 0 to 1 space. The usual transformation is called the inverse_logit transformation (that is why when doing logistic regression in glm its called link = "logit"). This transformation is built into stan:
+
+```{cmdstan, output.var="model_obj1"}
+
+data {
+  int N;
+  // Here we define the outcomes (i.e. number of tails) as a vector of integers (a vector of integers has to be an array)
+  array[N] int y;
+}
+
+parameters {
+  // probability parameter p between 0 and 1 i.e. upper and lower bounds at 0 and 1
+  real p;
+}
+
+//here is the model block again the same as how we simulated the data.
+model {
+  y ~ bernoulli(inv_logit(p));
+  
+}
+```
+
+# We can fit both models and see the results:
+
+```{r}
+fit_bound = model_obj$sample(data = list(N =N, y =tails), seed = seeds)
+fit_trans = model_obj1$sample(data = list(N =N, y =tails), seed = seeds)
+```
+
+## No warnings and no divergences for either!
+## Lets see if the results are also the same!
+
+```{r}
+fit_bound
+fit_trans
+```
+
+## They are very different and its esspecially the transformed model that seems to have a werid behaviour because the probability is above 1 (i.e. the mean is 1.31). So what is going on?
+
+## The thing going on here is that we transformed the probability parameter before it went into the bernoulli distribution but as far as the optimizations knows p is just a value that can take on every value. We therefore need to transform the probability parameter that is on the uncontrained space (i.e. it has not been transformed) when we do that we get:
+
+```{r}
+fit_trans$summary("p") %>% select(mean,q5,q95) %>% pivot_longer(everything()) %>% mutate(transformed_value = 1 / (1 + exp(-value)))
+```
+## Now we see that its very very similar to the bounded STAN model.
+
+## One might also do the same in frequentist perspective and get the same results:
+```{r}
+sjPlot::tab_model(glm(tails~1))
+```
+
+## Ofcause this example isn't to interresting as i could of just calculated the proportion of 1's i.e.
+```{r}
+sum(tails)/length(tails)
+```
+
+## And get the same basic estimate for the mean. Here i however do not get the uncertainty of the estimate. 
+
+## Lets therefore now move to something more complicated and confuse ourselves with the different ways on can do logistic regression, or rather the ways that are similar but have different names.
+
+
+
+
+
