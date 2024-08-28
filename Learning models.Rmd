@@ -9,6 +9,7 @@ runtime: shiny
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(cmdstanr)
+library(shiny)
 register_knitr_engine(override = FALSE)
 
 seeds = 123
@@ -290,5 +291,14 @@ ggplot(data, aes(x = trial, y = expect)) +
   
 ```
 
+
+
+## Running it in stan
+
+```{r}
+
+
+
+```
 
 
