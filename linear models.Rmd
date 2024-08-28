@@ -1,5 +1,5 @@
 ---
-title: "Linear madness"
+title: "Linear models"
 output: html_document
 date: "2024-08-17"
 ---
@@ -13,24 +13,24 @@ register_knitr_engine(override = FALSE)
 seeds = 123
 ```
 
-## This markdown is supposed to give a gentle refresher on linear models and in doing so introduce STAN and bayesian inference.
+## This markdown is supposed to give a gentle refresher on linear models and, in doing so, introduce STAN and Bayesian inference.
 
 ### In order to start we make some data (i.e. we simulate it). This is one of the most useful take aways. No matter what kind of question and or statistical framework one uses simulating senarioes and then seeing what happens is so usefull because you know the results and therefore can see when something works and when it does not!
 
 ### Therefore for the first simulation of data we take it slow!
 
-### We want to simulate data where we have two variables that are linearly dependent. All that means that we can mathematically write the relationship between the two variables (x and y) as something like the following.
+### We want to simulate data where we have two variables that are linearly dependent. All that means is that we can mathematically write the relationship between the two variables (x and y) as something like the following.
 
 $$
 y = a + b \cdot x
 $$
 
-### so if we conducted an experiment we would be collecting x and y and we would want to estimate the parameters i.e. a and b from the linear model. 
+### So if we conducted an experiment, we would be collecting x and y, and we would want to estimate the parameters, i.e., a and b, from the linear model.
 
-### However when simulating data we choose the parameters and simulate the independent variables (i.e. our y).
+### However, when simulating data, we choose the parameters and simulate the independent variables (i.e., our y).
 
 
-### This means that we need to simulate some intercepts (a) some slope (b) and some data (x) we do this in the following. Note the parameters (a and b) are single values whereas the data (x) is vectors (many values).  Here we choose that the intercept is 5 the slope is 3 and x is a sequence of numbers from 0 to 100 in increments of 1.
+### This means that we need to simulate some intercepts (a), some slopes (b), and some data (x). We do this in the following way: Note that the parameters (a and b) are single values, whereas the data (x) is a vector (many values). Here, we choose the intercept to be 5, the slope to be 3, and x as a sequence of numbers from 0 to 100 in increments of 1.
 
 ```{r}
 N = 100
@@ -45,14 +45,16 @@ x = seq(0,100, length.out = N)
 y = a+b*x
 ```
 
-### Now importantly we can plot it. If you can't plot it you do not understand it.
+### Now importantly we can plot it.
 
 ```{r}
 data.frame() %>% ggplot(aes(x =x,y = y))+geom_point()+theme_classic()
 ```
 
-### We have made a straight line of points! Perfect. However this is not how data looks there is noise! We can add such noise by the way that we select our x.
+### We have made a straight line of points! Perfect. However, this is not how data looks there is noise! We can add such noise by the way that we select our x.
+
 ### Instead of just getting a sequence of numbers from 0 to 100 we can sample from a distribution. to do this we need to specify the spread of the distribution. 
+
 ### this is sigma which here i set to 10
 
 ```{r}
@@ -65,11 +67,15 @@ y = a+b*x
 ```{r}
 data.frame() %>% ggplot(aes(x =x,y = y))+geom_point()+theme_classic()
 ```
+
 ## Well that did not work. Which is because there still is a deterministic relationship between x and y. 
 
 ## What is assumed in a linear regression is that the is that the y is stochastically related to x i.e. y ~ x. where the link is given by the probability density function. i.e.
+
 ## y ~ N(a+b*x , sigma)
+
 ## so we might go back and take the sequence of x's:
+
 ```{r}
 x = seq(0,100,length.out = N)
 y = rnorm(N,a+b*x,10)
@@ -91,7 +97,7 @@ sjPlot::tab_model(m1)
 ```
 
 
-### here we get a (intercept) and b the slope. Which are not terribly off. To get the last parameter sigma we have to specfify it:
+### here we get a (intercept) and b (the slope). Which are not terribly off. To get the last parameter sigma we can do:
 
 ```{r}
 sigma(m1)
@@ -166,19 +172,18 @@ data.frame() %>% ggplot()+
 
 ```
 
-### Looks similar and also matches quite nicely what we put in (a = 5, b = 3 and sigma = 10). There are however some things to note about the above.
+### Looks similar and also matches quite nicely what we put in (a = 5, b = 3 and sigma = 10). However, there are some things to note about the above.
 
-### The main difference is the uncertainty estimate (the vertical bars) of the sigma (how spread the data is around our predictions). We see that the Freq. model is just a point (it is a point), but that there is some uncertainty around it in the bayesian perspective and here that actually overlaps with the real value of 10. This is going to be a theme. In bayes you can estimate many more parameters that gets fixed in the frequentists perspective. With this estimation you therefore also get uncertainty estimates which i would argue makes the estimates themselves usefull!
-
-
+### The main difference is the uncertainty estimate (the vertical bars) of the sigma (how spread the data is around our predictions). We see that the frequentist model is just a point estimate, but there is some uncertainty around it in the Bayesian perspective, and here that actually overlaps with the real value of 10. This is going to be a theme. In Bayes, you can estimate many more parameters that get fixed in the frequentist perspective. With this estimation, you also get uncertainty estimates, which I would argue makes the estimates themselves useful!
 
 
 # Priors
 
-## I have here just left out everything about priors and have run a bayesian model "without" priors. This is because we shouldn't get paralyzed by these priors they are freinds that help us with our models. But now we do have to talk about them!
+## I have here just left out everything about priors and have run a bayesian model "without" priors.
 
 
 ## Priors are just some distributions that we put on our parameters of interrest. That is it. If we take the previous model we can set some priors on our 3 parameters and see what happens. Below i set the same priors for our three parameters here a normal distribution with mean 0 and standard deviation 100.
+
 ## These are extremely wide priors. In order to understand what they entail we plot them, but not as their distributions as that isn't to helpful (can be done with plot(hist(rnorm(10000,0,100)))), but instead we plot the resulting regression lines we think are possible apriori to seeing the data. Here i plot 100 of such "realizations" of just the regression lines without the uncertainty about them.
 
 ```{r}

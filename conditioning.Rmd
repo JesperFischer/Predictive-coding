@@ -1,0 +1,353 @@
+---
+title: "Eletrical conditioning"
+output:
+  pdf_document: default
+  html_document:
+    theme: cerulean
+    toc: true
+    toc_float: true
+  word_document: default
+date: "2023-07-21"
+---
+
+<style type="text/css">
+  body{
+  font-size: 14pt;
+}
+</style>
+
+## Overview of the model
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidybayes,furrr,tidyverse,ggdist,psycho,caret,patchwork, gt, cowplot, grid,reticulate,cmdstanr,posterior,rstan,bayesplot,brms,truncnorm, patchwork, ggridges, tidyverse)
+```
+
+The Rescorla Wagner model for the current study works in the following way. We start by assuming that the perception of pain ($p_t$) is linear combination of the physical stimulus ($N_t$) and the expectation of the of said stimulus ($E_t$) i.e.
+
+```{=tex}
+\begin{equation}
+\tag{1}
+p_t = (1-\gamma) \cdot N_t+\gamma \cdot E_t
+$$\end{equation}
+```
+
+
+Here the $\gamma$ parameter controls how much expectations matter in the perception of pain compared to the physical stimulus. i.e. higher values higher weighting on expectations and lower weighting on the physical stimulus.
+This percept elicits a prediction error $\delta_t$ which is the difference between the percept and the expectation of the percept at that trial
+$$
+\delta_t = p_t-E_t
+$$
+This prediction error is then used to update the expectation on the next trial together with a learning rate:
+$$
+E_{t+1} = E_{t}+\alpha \cdot \delta_t
+$$
+which can also be written like (1)
+```{=tex}
+\begin{equation}
+\tag{2}
+E_{t+1} = (1-\alpha) \cdot E_t+\alpha \cdot P_t
+$$\end{equation}
+```
+
+The only thing this model therefore needs for feedforward simulations is an initial expectation, a sequence of stimuli and two parameter values $\alpha$ and $\gamma$.
+Here i start by defining the inital expectation $e0$ as 0.5 i.e. a naive agent.
+
+## Simualate agent from the model
+Starting off by defining some parameter values which we put in a dataframe.
+```{r}
+gamma = 0.1
+alpha = 0.05
+high_stim = 0.7
+low_stim = 0.3
+e0_low = 0.1
+e0_high = 0.9
+prec_expectation = 500
+prec_pain = 500
+trials = 50
+ncues = 2
+
+parameters = data.frame(gamma = gamma,
+                        alpha = alpha,
+                        high_stim = high_stim,
+                        low_stim = low_stim,
+                        e0_low = e0_low,
+                        e0_high = e0_high,
+                        prec_expectation = prec_expectation,
+                        prec_pain = prec_pain,
+                        trials = trials,
+                        ncues = ncues)
+```
+
+
+Next we define the agent that takes the parameter values and updates his / her beliefs based on the assumptions made above.
+```{r}
+rw_agent = function(parameters){
+  
+  
+  expectations = array(NA, parameters$trials)
+  percepts = array(NA,parameters$trials)
+  pe = array(NA,parameters$trials)
+  percept = array(NA,parameters$trials)
+  
+
+  stim = sample(c(parameters$stim_high, parameters$stim_low), parameters$trials, replace = T)
+  
+  range <- -(parameters$ncues/2):(parameters$ncues/2)
+  
+  range <- range[range != 0]
+  
+  cue = 1
+  while(sum(cue) != 0){
+    cue = sample(range, parameters$trials, replace = T)
+  }
+  #assuming that participant group the cues into low and high we get
+  cue = ifelse(cue < 1, -1, 1)
+  
+  low_cue_id = which(cue == -1)
+  high_cue_id = which(cue == 1)
+  
+  cue 
+  stim
+
+  expectations_low = array(NA,length(low_cue_id))
+  percepts_low = array(NA,length(low_cue_id))
+  pe_low = array(NA,length(low_cue_id))
+  percept_low = array(NA,length(low_cue_id))
+  
+  expectations_high = array(NA,length(high_cue_id))
+  percepts_high = array(NA,length(high_cue_id))
+  pe_high = array(NA,length(high_cue_id))
+  percept_high = array(NA,length(high_cue_id))
+  
+  
+  
+  expectations_low[1] = parameters$e0_low
+  expectations_high[1] = parameters$e0_high
+
+
+  for(low in 1:(parameters$trials-length(high_cue_id))){
+
+      percepts_low[low] = (1-parameters$gamma)*stim[low_cue_id[low]]+parameters$gamma*expectations_low[low]
+
+      percept_low[low] = extraDistr::rprop(1,prec_pain,percepts_low[low])
+
+      pe_low[low] = percept_low[low]-expectations_low[low]
+
+      if(pe_low[low] < 0){
+        expectations_low[low+1] = extraDistr::rprop(1,prec_expectation,expectations_low[low]+parameters$alpha_c*pe_low[low])
+
+      }else{
+        expectations_low[low+1] = extraDistr::rprop(1,prec_expectation,expectations_low[low]+parameters$alpha_dc*pe_low[low])
+      }
+  }
+  for(high in 1:(parameters$trials-length(low_cue_id))){
+
+    percepts_high[high] = (1-parameters$gamma)*stim[high_cue_id[high]]+parameters$gamma*expectations_high[high]
+
+    percept_high[high] = extraDistr::rprop(1,prec_pain,percepts_high[high])
+
+    pe_high[high] = percept_high[high]-expectations_high[high]
+
+  if(pe_high[high] < 0){
+    expectations_high[high+1] = extraDistr::rprop(1,prec_expectation,expectations_high[high]+parameters$alpha_dc*pe_high[high])
+  }else{
+    expectations_high[high+1] = extraDistr::rprop(1,prec_expectation,expectations_high[high]+parameters$alpha_c*pe_high[high])
+  }
+  }
+
+
+
+    
+    
+  expectations[low_cue_id] = expectations_low[1:length(low_cue_id)]
+  expectations[high_cue_id] = expectations_high[1:length(high_cue_id)]
+  
+  percepts[low_cue_id] = percept_low[1:length(low_cue_id)]
+  percepts[high_cue_id] = percept_high[1:length(high_cue_id)]
+  
+  data = data.frame(expectations = expectations,
+           percepts = percepts,
+           gamma = parameters$gamma,
+           alpha_c = parameters$alpha_c,
+           alpha_dc = parameters$alpha_dc,
+           prec_expectation = parameters$prec_expectation,
+           prec_pain = parameters$prec_pain,
+           e0_low = parameters$e0_low,
+           e0_high = parameters$e0_high,
+           trials = 1:parameters$trials,
+           stim_high = parameters$stim_high,
+           stim_low = parameters$stim_low,
+           stim = stim,
+           cue = cue)
+
+  trials = data %>% pivot_longer(cols = c("expectations","percepts")) %>% 
+    ggplot(aes(x = trials, y = value, shape = as.factor(cue), col = as.factor(name)))+
+    geom_point()+geom_smooth(method = "lm", se = F)+
+    facet_grid(stim~cue, labeller = label_both)+
+    theme_classic()
+  
+  maineffects = data %>% pivot_longer(cols = c("expectations","percepts")) %>% 
+    ggplot(aes(x = as.factor(cue), y = value, col = as.factor(stim)))+
+    geom_boxplot()+
+    facet_grid(~name, labeller = label_both)+
+    theme_classic()
+  
+  
+  return(list(data, trials, maineffects, low_cue_id, high_cue_id))
+}
+```
+
+
+Now we can run the agent with our defined parameter values and plot the results.
+```{r}
+gamma = 0.3
+alpha_c = 0.3
+alpha_dc = 0.1
+stim_high = 0.8
+stim_low = 0.2
+e0_low = 0.1
+e0_high = 0.9
+prec_expectation = 50
+prec_pain = 50
+trials = 100
+ncues = 2
+
+parameters = data.frame(gamma = gamma,
+                        alpha_c = alpha_c,
+                        alpha_dc = alpha_dc,
+                        stim_high = stim_high,
+                        stim_low = stim_low,
+                        e0_low = e0_low,
+                        e0_high = e0_high,
+                        prec_expectation = prec_expectation,
+                        prec_pain = prec_pain,
+                        trials = trials,
+                        ncues = ncues)
+
+
+data = rw_agent(parameters)
+
+data[[2]]
+#data[[3]]
+
+#summary(lm(percepts ~ as.factor(cue)*as.factor(stim), data = data[[1]]))
+```
+We see in the above plot that when the stimulus is painful i.e. 1 (the most painful) the agent tend to rate the stimulus as more intense as when its 0. Furthermore we see that the expectations (red) oscillates a lot throughout trials but in general that when expectations become quite low the perceived pain follows this decreased expectation and vice versa.
+Next to see if the parameters of the model actually can be meaningfully estimated by inverting the model we write the generative model in stan and makes use of the powerful MCMC sampling. To do this we do have to put some prior values of our parameters of interest. Here we use the following priors
+$\alpha \sim B(0.3,5)$
+$\gamma \sim B(0.3,5)$
+$E_{prec} \sim Gamma(1,10)$
+$P_{prec} \sim Gamma(1,10)$
+Where the Beta distribution used is the reparameterized beta distribution with mean and precision. To get an idea of what these values entail we can plot them. Note that we here restrict that alpha and beta parameters to be between 0 and 1 and the precision parameters to be strictly positive.
+```{r}
+data.frame() %>% ggplot(aes(x = extraDistr::rprop(20000,5,0.3)))+
+  geom_histogram(col = "black")+
+  theme_classic()+
+  ggtitle("Prior for alpha and gamma")+
+  xlab("value")
+
+data.frame() %>% ggplot(aes(x = rgamma(20000,1,1/10)))+
+  geom_histogram(col = "black")+
+  theme_classic()+
+  ggtitle("Prior for precision on expectations and percepts")+
+  xlab("value")
+```
+
+With these priors we compile the Stan model and fit it to the simulated data
+```{r}
+#compiling the model
+#mod = cmdstanr::cmdstan_model(here::here("rw_conditioning.stan"))
+mod = cmdstanr::cmdstan_model(here::here("elektrical conditioning.stan"))
+#getting the data into a list format for stan
+data1 = list(N = length(data[[1]]$trials),
+             expectations = data[[1]]$expectations,
+             percepts = data[[1]]$percepts,
+             stim = data[[1]]$stim,
+             low_cue_id = data[[4]],
+             high_cue_id = data[[5]]
+             )
+
+#fitting the actual model
+fit <- mod$sample(
+data = data1, 
+seed = 123, 
+chains = 4, 
+parallel_chains = 4,
+refresh = 100,
+adapt_delta = 0.99,
+max_treedepth = 12
+)
+
+#qq = fit$summary()
+
+plotdata = data[[1]] %>% pivot_longer(cols = c("expectations","percepts")) %>% rename(variable = name) %>% mutate(variable = as.factor(variable))
+levels(plotdata$variable) = c("mu_expectations","mu_pain")
+
+data.frame(fit$summary(variables = c("mu_pain","mu_expectations"))) %>% 
+  mutate(trial = rep(1:(nrow(.)/2),2), variable = gsub("\\[\\d+\\]$", "", variable))%>% 
+  mutate(stim = rep(data[[1]]$stim,2), cue = rep(data[[1]]$cue,2)) %>% 
+  ggplot(aes(x = trial, y = mean, shape = as.factor(cue), col = as.factor(variable)))+
+    geom_pointrange(aes(x = trial, y = mean, ymin = q5, ymax = q95))+geom_smooth(method = "lm", se = F)+
+    facet_grid(stim~cue, labeller = label_both)+
+    theme_classic()
+
+
+data[[1]] %>% pivot_longer(cols = c("expectations","percepts")) %>% 
+    ggplot(aes(x = trials, y = value, shape = as.factor(cue), col = as.factor(name)))+
+    geom_point()+geom_smooth(method = "lm", se = F)+
+    facet_grid(stim~cue, labeller = label_both)+
+    theme_classic()
+fit
+
+```
+
+lets start to look at some diagnostics
+```{r}
+flextable::flextable(data.frame(divergences = fit$diagnostic_summary()$num_divergent, max_treedepth = fit$diagnostic_summary()$num_max_treedepth, energy = fit$diagnostic_summary()$ebfmi))
+mcmc_trace(fit$draws(variables = c("alpha_c","alpha_dc", "gamma", "prec_expectation","prec_pain","e0_low","e0_high","stim_high","stim_low")))+theme_classic()
+```
+Next we can look at the prior posterior updates:
+```{r}
+draws_prior = as_draws_df(fit) %>% 
+  select(contains("prior")) %>% 
+  pivot_longer(cols = everything()) %>% 
+  mutate(prior = T) %>% 
+  mutate(name = gsub("^prior_", "", name))
+
+draws_posterior = as_draws_df(fit) %>% 
+  select("alpha_c","alpha_dc","gamma","prec_pain","prec_expectation", "e0_low","e0_high","stim_low","stim_high") %>% 
+  pivot_longer(cols = everything()) %>% 
+  mutate(prior = F)
+
+rbind(draws_prior, draws_posterior) %>% 
+  ggplot(aes(x = value, fill = prior))+
+  geom_histogram()+
+  theme_classic()+
+  facet_wrap(~name, scales = "free")+
+  geom_vline(data = data[[1]] %>% pivot_longer(cols = c("gamma","alpha_c","alpha_dc","prec_expectation","prec_pain", "e0_low","e0_high","stim_low","stim_high")), aes(xintercept = value))
+```
+
+```{r}
+flextable::flextable(fit$summary(variables = c("gamma",
+                                               "alpha_c",
+                                               "alpha_dc",
+                                               "prec_expectation",
+                                               "prec_pain",
+                                               "e0_low",
+                                               "e0_high",
+                                               "stim_low",
+                                               "stim_high")) %>% 
+                       as.data.frame(.) %>% 
+                       mutate_if(is.numeric, ~round(.,2)) %>% 
+                       mutate(simulated_value = c(data[[1]]$gamma[1],
+                                                  data[[1]]$alpha_c[1],
+                                                  data[[1]]$alpha_dc[1],
+                                                  data[[1]]$prec_pain[1],
+                                                  data[[1]]$prec_expectation[1],
+                                                  data[[1]]$e0_low[1],
+                                                  data[[1]]$e0_high[1],
+                                                  data[[1]]$stim_low[1],
+                                                  data[[1]]$stim_high[1])))
+```
+This looks okayish considering we simulated $alpha = 0.1$, $gamma = 0.3$, $prec_{pain} = 30$ and $prec_{expectation} = 30$, using 200 trials. The problem with this seems to be estimating the precision of the pain ratings aswell as the precision of the expectation.
